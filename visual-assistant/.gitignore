@@ -1,0 +1,178 @@
+# ------------------------------------------------------------------
+# Virtual environments
+# ------------------------------------------------------------------
+myenv/
+venv/
+env/
+ENV/
+.venv/
+virtualenv/
+
+# ------------------------------------------------------------------
+# Python
+# ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+
+# ------------------------------------------------------------------
+# Jupyter
+# ------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# ------------------------------------------------------------------
+# Environment / secrets
+# ------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ------------------------------------------------------------------
+# Data (large, regenerable, or private)
+# ------------------------------------------------------------------
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/corrections/*
+!data/corrections/.gitkeep
+*.csv
+*.tsv
+*.jsonl
+
+# ------------------------------------------------------------------
+# Model artifacts & checkpoints
+# ------------------------------------------------------------------
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.h5
+*.pb
+*.tflite
+*.mlmodel
+lora_adapters/
+*.lora
+
+# ------------------------------------------------------------------
+# Hugging Face cache
+# ------------------------------------------------------------------
+.cache/
+huggingface/
+~/.cache/huggingface/
+
+# ------------------------------------------------------------------
+# YOLO / Ultralytics
+# ------------------------------------------------------------------
+runs/
+weights/
+*.weights
+yolov8*.pt
+yolov5*.pt
+
+# ------------------------------------------------------------------
+# Logs
+# ------------------------------------------------------------------
+logs/
+*.log
+*.log.*
+
+# ------------------------------------------------------------------
+# Gradio
+# ------------------------------------------------------------------
+.gradio/
+gradio_cached_examples/
+flagged/
+
+# ------------------------------------------------------------------
+# Streamlit
+# ------------------------------------------------------------------
+.streamlit/secrets.toml
+
+# ------------------------------------------------------------------
+# FastAPI / uvicorn
+# ------------------------------------------------------------------
+*.pid
+*.sock
+
+# ------------------------------------------------------------------
+# React / Node (for ui/react_app)
+# ------------------------------------------------------------------
+node_modules/
+ui/react_app/build/
+ui/react_app/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.eslintcache
+
+# ------------------------------------------------------------------
+# IDE / Editors
+# ------------------------------------------------------------------
+.vscode/
+!.vscode/settings.json.example
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ------------------------------------------------------------------
+# OS junk
+# ------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ------------------------------------------------------------------
+# Misc
+# ------------------------------------------------------------------
+*.bak
+*.tmp
+*.temp
+scratch/
+notebooks/scratch/
