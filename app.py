@@ -2,6 +2,8 @@ import os
 import io
 import re
 import pickle
+import urllib.request
+from pathlib import Path
 from PIL import Image
 from gtts import gTTS
 import streamlit as st
@@ -15,11 +17,19 @@ from torchvision.models import resnet50, ResNet50_Weights
 # 0. DIRECTORY SETUP
 # ==========================================
 
-# Set BASE_DIR relative to script location
 BASE_DIR = Path(__file__).resolve().parent
 
 ENCODER_URL = "https://huggingface.co/your-username/sightvoice/resolve/main/encoder.pth"
 DECODER_URL = "https://huggingface.co/your-username/sightvoice/resolve/main/decoder.pth"
+
+def download_weight_if_missing(file_path, url):
+    """Downloads model weights if not locally present."""
+    if not file_path.exists():
+        st.info(f"Downloading {file_path.name}...")
+        try:
+            urllib.request.urlretrieve(url, file_path)
+        except Exception as e:
+            st.error(f"Failed to download {file_path.name}: {e}")
 
 # ==========================================
 # 1. PAGE SETUP
@@ -57,7 +67,6 @@ st.markdown("""
         color: var(--text);
     }
 
-    /* Ambient animated gradient backdrop */
     .stApp::before {
         content: "";
         position: fixed;
@@ -84,7 +93,6 @@ st.markdown("""
         max-width: 880px;
     }
 
-    /* Hero */
     .hero {
         display: flex;
         align-items: center;
@@ -126,7 +134,6 @@ st.markdown("""
         line-height: 1.5;
     }
 
-    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
         background: rgba(19,28,48,0.7);
@@ -152,7 +159,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab-highlight"] { display: none; }
     .stTabs [data-baseweb="tab-border"] { display: none; }
 
-    /* File uploader & camera */
     section[data-testid="stFileUploaderDropzone"],
     div[data-testid="stCameraInput"] video,
     div[data-testid="stCameraInput"] img {
@@ -164,7 +170,6 @@ st.markdown("""
         padding: 26px !important;
     }
 
-    /* Buttons */
     .stButton > button {
         width: 100%;
         height: 52px;
@@ -184,7 +189,6 @@ st.markdown("""
     }
     .stButton > button:active { transform: translateY(0); }
 
-    /* Caption card */
     .caption-card {
         position: relative;
         margin: 26px 0 18px 0;
@@ -230,7 +234,6 @@ st.markdown("""
     }
     .caption-text::before, .caption-text::after { content: '"'; color: var(--accent-2); }
 
-    /* Section titles */
     .section-title {
         display: flex;
         align-items: center;
@@ -243,7 +246,6 @@ st.markdown("""
         margin: 32px 0 14px 2px;
     }
 
-    /* Status pill */
     .status-pill {
         display: inline-flex;
         align-items: center;
@@ -267,17 +269,14 @@ st.markdown("""
         50% { opacity: 0.35; }
     }
 
-    /* Audio player */
     audio { width: 100%; border-radius: 12px; }
 
-    /* Image polish */
     div[data-testid="stImage"] img {
         border-radius: 16px;
         border: 1px solid var(--stroke);
         box-shadow: 0 20px 40px -22px rgba(0,0,0,0.9);
     }
 
-    /* Hide Streamlit chrome */
     #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -358,7 +357,14 @@ class DecoderRNN(nn.Module):
         self.gru = nn.GRU(embed_size + embed_size, hidden_size, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, vocab_size)
 
-# ResNet Image Transformation Pipeline
+    def forward(self, features, hidden, word):
+        word_embed = self.embed(word)
+        context_vector, attention_weights = self.attention(features, hidden)
+        gru_input = torch.cat((word_embed, context_vector), dim=1).unsqueeze(1)
+        output, hidden = self.gru(gru_input, hidden.unsqueeze(0))
+        output = self.fc(output.squeeze(1))
+        return output, hidden.squeeze(0), attention_weights
+
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -376,7 +382,6 @@ def load_pipeline():
     decoder_path = BASE_DIR / "decoder.pth"
     vocab_path = BASE_DIR / "vocab.pkl"
 
-    # Ensure model weights exist locally before attempting to load
     download_weight_if_missing(encoder_path, ENCODER_URL)
     download_weight_if_missing(decoder_path, DECODER_URL)
 
@@ -398,7 +403,6 @@ def load_pipeline():
     encoder = EncoderCNN(embed_size).to(device)
     decoder = DecoderRNN(embed_size, hidden_size, vocab_size).to(device)
 
-    # weights_only=True prevents arbitrary code execution vulnerabilities in PyTorch 2.0+
     encoder.load_state_dict(torch.load(encoder_path, map_location=device, weights_only=True))
     decoder.load_state_dict(torch.load(decoder_path, map_location=device, weights_only=True))
 
@@ -406,6 +410,30 @@ def load_pipeline():
     decoder.eval()
 
     return encoder, decoder, vocab, device
+
+encoder, decoder, vocab, device = load_pipeline()
+
+def generate_caption(image, max_len=20):
+    image_tensor = transform(image.convert("RGB")).unsqueeze(0).to(device)
+    caption = []
+
+    with torch.no_grad():
+        features = encoder(image_tensor)
+        hidden = torch.zeros(1, 512).to(device)
+        word = torch.tensor([vocab.stoi["<SOS>"]]).to(device)
+
+        for _ in range(max_len):
+            output, hidden, _ = decoder(features, hidden, word)
+            predicted = output.argmax(1)
+            token = vocab.itos[predicted.item()]
+
+            if token == "<EOS>":
+                break
+
+            caption.append(token)
+            word = predicted
+
+    return " ".join(caption)
 
 def text_to_speech_bytes(text):
     tts = gTTS(text=text, lang='en')
@@ -479,7 +507,6 @@ if image_input:
     with st.spinner("Analyzing scene and synthesizing narration..."):
         caption_text = generate_caption(image_input)
         
-        # Cache audio in session_state to prevent redundant gTTS calls on replay
         if "audio_bytes" not in st.session_state or st.session_state.get("last_caption") != caption_text:
             st.session_state.audio_bytes = text_to_speech_bytes(caption_text)
             st.session_state.last_caption = caption_text
