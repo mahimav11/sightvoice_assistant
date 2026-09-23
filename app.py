@@ -358,32 +358,30 @@ class DecoderRNN(nn.Module):
 @st.cache_resource
 def load_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    with open("vocab.pkl", "rb") as f:
+    
+    # 1. Path to vocab.pkl
+    vocab_path = os.path.join(BASE_DIR, "vocab.pkl")
+    with open(vocab_path, "rb") as f:
         vocab = pickle.load(f)
-
+        
     embed_size = 256
     hidden_size = 512
     vocab_size = len(vocab)
-
+    
     encoder = EncoderCNN(embed_size).to(device)
     decoder = DecoderRNN(embed_size, hidden_size, vocab_size).to(device)
-
-    encoder.load_state_dict(torch.load("encoder.pth", map_location=device))
-    decoder.load_state_dict(torch.load("decoder.pth", map_location=device))
-
+    
+    # 2. Paths to model weights
+    encoder_path = os.path.join(BASE_DIR, "encoder.pth")
+    decoder_path = os.path.join(BASE_DIR, "decoder.pth")
+    
+    encoder.load_state_dict(torch.load(encoder_path, map_location=device))
+    decoder.load_state_dict(torch.load(decoder_path, map_location=device))
+    
     encoder.eval()
     decoder.eval()
-
+    
     return encoder, decoder, vocab, device
-
-encoder, decoder, vocab, device = load_pipeline()
-
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-])
 
 def generate_caption(image, max_length=20):
     img_tensor = transform(image.convert("RGB")).unsqueeze(0).to(device)
