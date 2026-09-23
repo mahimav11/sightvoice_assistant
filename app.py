@@ -14,7 +14,12 @@ from torchvision.models import resnet50, ResNet50_Weights
 # ==========================================
 # 0. DIRECTORY SETUP
 # ==========================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Set BASE_DIR relative to script location
+BASE_DIR = Path(__file__).resolve().parent
+
+ENCODER_URL = "https://huggingface.co/your-username/sightvoice/resolve/main/encoder.pth"
+DECODER_URL = "https://huggingface.co/your-username/sightvoice/resolve/main/decoder.pth"
 
 # ==========================================
 # 1. PAGE SETUP
@@ -371,12 +376,16 @@ def load_pipeline():
     decoder_path = BASE_DIR / "decoder.pth"
     vocab_path = BASE_DIR / "vocab.pkl"
 
-    # Ensure weights exist locally before PyTorch loads them
+    # Ensure model weights exist locally before attempting to load
     download_weight_if_missing(encoder_path, ENCODER_URL)
     download_weight_if_missing(decoder_path, DECODER_URL)
 
     if not encoder_path.exists() or not decoder_path.exists():
         st.error("Model weight files could not be found or downloaded.")
+        st.stop()
+
+    if not vocab_path.exists():
+        st.error("Vocabulary file (vocab.pkl) is missing from the directory.")
         st.stop()
 
     with open(vocab_path, "rb") as f:
@@ -389,8 +398,9 @@ def load_pipeline():
     encoder = EncoderCNN(embed_size).to(device)
     decoder = DecoderRNN(embed_size, hidden_size, vocab_size).to(device)
 
-    encoder.load_state_dict(torch.load(encoder_path, map_location=device))
-    decoder.load_state_dict(torch.load(decoder_path, map_location=device))
+    # weights_only=True prevents arbitrary code execution vulnerabilities in PyTorch 2.0+
+    encoder.load_state_dict(torch.load(encoder_path, map_location=device, weights_only=True))
+    decoder.load_state_dict(torch.load(decoder_path, map_location=device, weights_only=True))
 
     encoder.eval()
     decoder.eval()
