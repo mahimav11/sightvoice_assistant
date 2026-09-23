@@ -367,59 +367,35 @@ transform = transforms.Compose([
 def load_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    vocab_path = os.path.join(BASE_DIR, "vocab.pkl")
+    encoder_path = BASE_DIR / "encoder.pth"
+    decoder_path = BASE_DIR / "decoder.pth"
+    vocab_path = BASE_DIR / "vocab.pkl"
+
+    # Ensure weights exist locally before PyTorch loads them
+    download_weight_if_missing(encoder_path, ENCODER_URL)
+    download_weight_if_missing(decoder_path, DECODER_URL)
+
+    if not encoder_path.exists() or not decoder_path.exists():
+        st.error("Model weight files could not be found or downloaded.")
+        st.stop()
+
     with open(vocab_path, "rb") as f:
         vocab = pickle.load(f)
-        
+
     embed_size = 256
     hidden_size = 512
     vocab_size = len(vocab)
-    
+
     encoder = EncoderCNN(embed_size).to(device)
     decoder = DecoderRNN(embed_size, hidden_size, vocab_size).to(device)
-    
-    encoder_path = os.path.join(BASE_DIR, "encoder.pth")
-    decoder_path = os.path.join(BASE_DIR, "decoder.pth")
-    
+
     encoder.load_state_dict(torch.load(encoder_path, map_location=device))
     decoder.load_state_dict(torch.load(decoder_path, map_location=device))
-    
+
     encoder.eval()
     decoder.eval()
-    
+
     return encoder, decoder, vocab, device
-
-# Global initialization at script level to solve NameError
-encoder, decoder, vocab, device = load_pipeline()
-
-def generate_caption(image, max_length=20):
-    img_tensor = transform(image.convert("RGB")).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        features = encoder(img_tensor)
-        hidden = torch.zeros(1, 512).to(device)
-
-        caption_indices = [vocab.stoi["<SOS>"]]
-
-        for _ in range(max_length):
-            prev_word = torch.tensor([caption_indices[-1]]).to(device)
-            embeds = decoder.embed(prev_word).unsqueeze(0)
-            context_vector, _ = decoder.attention(features, hidden)
-
-            gru_input = torch.cat((context_vector.unsqueeze(1), embeds), dim=2)
-            output, hidden = decoder.gru(gru_input, hidden.unsqueeze(0))
-            hidden = hidden.squeeze(0)
-
-            predicted = decoder.fc(output).argmax(2).item()
-
-            if predicted == vocab.stoi["<EOS>"]:
-                break
-
-            caption_indices.append(predicted)
-
-    caption = [vocab.itos[idx] for idx in caption_indices
-               if idx not in (vocab.stoi["<SOS>"], vocab.stoi["<PAD>"])]
-    return " ".join(caption)
 
 def text_to_speech_bytes(text):
     tts = gTTS(text=text, lang='en')
