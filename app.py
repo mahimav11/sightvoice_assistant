@@ -12,6 +12,11 @@ import torchvision.transforms as transforms
 from torchvision.models import resnet50, ResNet50_Weights
 
 # ==========================================
+# 0. DIRECTORY SETUP
+# ==========================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ==========================================
 # 1. PAGE SETUP
 # ==========================================
 st.set_page_config(
@@ -267,9 +272,6 @@ st.markdown("""
         box-shadow: 0 20px 40px -22px rgba(0,0,0,0.9);
     }
 
-    /* Spinner */
-    .stSpinner > div { border-top-color: var(--accent) !important; }
-
     /* Hide Streamlit chrome */
     #MainMenu, footer, header { visibility: hidden; }
 </style>
@@ -292,7 +294,6 @@ ICON_CAMERA = '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2
 ICON_UPLOAD = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>'
 ICON_SPARK = '<path d="M12 2l1.9 5.6L19.5 9.5 13.9 11.4 12 17l-1.9-5.6L4.5 9.5l5.6-1.9z"/>'
 ICON_VOLUME = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>'
-ICON_REPLAY = '<polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2-9.5L1 10"/>'
 ICON_IMAGE = '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>'
 
 # ==========================================
@@ -352,6 +353,13 @@ class DecoderRNN(nn.Module):
         self.gru = nn.GRU(embed_size + embed_size, hidden_size, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, vocab_size)
 
+# ResNet Image Transformation Pipeline
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+])
+
 # ==========================================
 # 5. LOAD CACHED MODEL WEIGHTS & VOCAB
 # ==========================================
@@ -359,7 +367,6 @@ class DecoderRNN(nn.Module):
 def load_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # 1. Path to vocab.pkl
     vocab_path = os.path.join(BASE_DIR, "vocab.pkl")
     with open(vocab_path, "rb") as f:
         vocab = pickle.load(f)
@@ -371,7 +378,6 @@ def load_pipeline():
     encoder = EncoderCNN(embed_size).to(device)
     decoder = DecoderRNN(embed_size, hidden_size, vocab_size).to(device)
     
-    # 2. Paths to model weights
     encoder_path = os.path.join(BASE_DIR, "encoder.pth")
     decoder_path = os.path.join(BASE_DIR, "decoder.pth")
     
@@ -382,6 +388,9 @@ def load_pipeline():
     decoder.eval()
     
     return encoder, decoder, vocab, device
+
+# Global initialization at script level to solve NameError
+encoder, decoder, vocab, device = load_pipeline()
 
 def generate_caption(image, max_length=20):
     img_tensor = transform(image.convert("RGB")).unsqueeze(0).to(device)
@@ -483,7 +492,11 @@ if image_input:
 
     with st.spinner("Analyzing scene and synthesizing narration..."):
         caption_text = generate_caption(image_input)
-        audio_bytes = text_to_speech_bytes(caption_text)
+        
+        # Cache audio in session_state to prevent redundant gTTS calls on replay
+        if "audio_bytes" not in st.session_state or st.session_state.get("last_caption") != caption_text:
+            st.session_state.audio_bytes = text_to_speech_bytes(caption_text)
+            st.session_state.last_caption = caption_text
 
     st.markdown(f"""
     <div class="caption-card">
@@ -499,9 +512,9 @@ if image_input:
         f'<div class="section-title">{svg(ICON_VOLUME, size=16, color="#8affc1")} Voice Narration</div>',
         unsafe_allow_html=True
     )
-    st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+    st.audio(st.session_state.audio_bytes, format="audio/mp3", autoplay=True)
 
     st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
 
     if st.button("Replay Speech Description", use_container_width=True):
-        st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+        st.audio(st.session_state.audio_bytes, format="audio/mp3", autoplay=True)
