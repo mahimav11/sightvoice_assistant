@@ -40,3 +40,16 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+env/
+venv/
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+.streamlit/secrets.toml
+*.pth
+*.zip
+Images/
+captions.txt

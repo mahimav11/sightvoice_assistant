@@ -1,0 +1,139 @@
+{
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 5.0835,
+      "val_loss": 3.7261,
+      "val_ppl": 41.52
+    },
+    {
+      "epoch": 2,
+      "train_loss": 4.2017,
+      "val_loss": 3.2869,
+      "val_ppl": 26.76
+    },
+    {
+      "epoch": 3,
+      "train_loss": 3.9059,
+      "val_loss": 3.0779,
+      "val_ppl": 21.71
+    },
+    {
+      "epoch": 4,
+      "train_loss": 3.7357,
+      "val_loss": 2.9525,
+      "val_ppl": 19.15
+    },
+    {
+      "epoch": 5,
+      "train_loss": 3.6207,
+      "val_loss": 2.8749,
+      "val_ppl": 17.72
+    },
+    {
+      "epoch": 6,
+      "train_loss": 3.5248,
+      "val_loss": 2.8233,
+      "val_ppl": 16.83
+    },
+    {
+      "epoch": 7,
+      "train_loss": 3.4458,
+      "val_loss": 2.7861,
+      "val_ppl": 16.22
+    },
+    {
+      "epoch": 8,
+      "train_loss": 3.3775,
+      "val_loss": 2.7495,
+      "val_ppl": 15.63
+    },
+    {
+      "epoch": 9,
+      "train_loss": 3.3152,
+      "val_loss": 2.7418,
+      "val_ppl": 15.52
+    },
+    {
+      "epoch": 10,
+      "train_loss": 3.2599,
+      "val_loss": 2.7222,
+      "val_ppl": 15.21
+    },
+    {
+      "epoch": 11,
+      "train_loss": 3.208,
+      "val_loss": 2.7106,
+      "val_ppl": 15.04
+    },
+    {
+      "epoch": 12,
+      "train_loss": 3.1606,
+      "val_loss": 2.705,
+      "val_ppl": 14.95
+    },
+    {
+      "epoch": 13,
+      "train_loss": 3.1147,
+      "val_loss": 2.7007,
+      "val_ppl": 14.89
+    },
+    {
+      "epoch": 14,
+      "train_loss": 3.0734,
+      "val_loss": 2.6968,
+      "val_ppl": 14.83
+    },
+    {
+      "epoch": 15,
+      "train_loss": 3.0327,
+      "val_loss": 2.6912,
+      "val_ppl": 14.75
+    },
+    {
+      "epoch": 16,
+      "train_loss": 2.9944,
+      "val_loss": 2.6954,
+      "val_ppl": 14.81
+    },
+    {
+      "epoch": 17,
+      "train_loss": 2.96,
+      "val_loss": 2.7064,
+      "val_ppl": 14.98
+    },
+    {
+      "epoch": 18,
+      "train_loss": 2.889,
+      "val_loss": 2.6962,
+      "val_ppl": 14.82
+    }
+  ],
+  "test_bleu": {
+    "BLEU-1": 0.6639,
+    "BLEU-2": 0.4837,
+    "BLEU-3": 0.3396,
+    "BLEU-4": 0.2308
+  },
+  "best_val_loss": 2.6912,
+  "args": {
+    "dataset": null,
+    "out_dir": "/kaggle/working",
+    "epochs": 20,
+    "batch_size": 32,
+    "lr": 0.0004,
+    "embed_size": 256,
+    "hidden_size": 512,
+    "dropout": 0.3,
+    "label_smoothing": 0.1,
+    "min_freq": 3,
+    "patience": 3,
+    "val_frac": 0.05,
+    "workers": 4,
+    "beam_size": 3,
+    "bleu_images": 300,
+    "limit": 0,
+    "no_pretrained": false,
+    "seed": 42
+  }
+}

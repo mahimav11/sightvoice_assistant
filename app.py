@@ -1,35 +1,43 @@
-import os
+import hashlib
+import html
+import inspect
 import io
-import re
-import pickle
+import os
 import urllib.request
 from pathlib import Path
-from PIL import Image
-from gtts import gTTS
+
+import numpy as np
 import streamlit as st
-
 import torch
-import torch.nn as nn
 import torchvision.transforms as transforms
-from torchvision.models import resnet50, ResNet50_Weights
+from gtts import gTTS
+from PIL import Image, ImageOps
+
+# Model code lives in model.py and is shared with train.py, so training and
+# inference can never disagree again.
+from model import DecoderRNN, EncoderCNN, Vocabulary, beam_search, load_vocab_pickle
 
 # ==========================================
-# 0. DIRECTORY SETUP
+# 0. FILES & SETTINGS
 # ==========================================
-
 BASE_DIR = Path(__file__).resolve().parent
 
-ENCODER_URL = "https://huggingface.co/your-username/sightvoice/resolve/main/encoder.pth"
-DECODER_URL = "https://huggingface.co/your-username/sightvoice/resolve/main/decoder.pth"
+V2_CHECKPOINT = BASE_DIR / "sightvoice_v2.pt"   # new model, produced by train.py
+LEGACY_ENCODER = BASE_DIR / "encoder.pth"       # your original model files
+LEGACY_DECODER = BASE_DIR / "decoder.pth"
+LEGACY_VOCAB = BASE_DIR / "vocab.pkl"
 
-def download_weight_if_missing(file_path, url):
-    """Downloads model weights if not locally present."""
-    if not file_path.exists():
-        st.info(f"Downloading {file_path.name}...")
-        try:
-            urllib.request.urlretrieve(url, file_path)
-        except Exception as e:
-            st.error(f"Failed to download {file_path.name}: {e}")
+# Optional download locations, used only if the files are not next to app.py.
+# Set them as environment variables (or Streamlit Cloud secrets). The old code
+# pointed at a placeholder "your-username" URL that could never work.
+CHECKPOINT_URL = os.environ.get("SIGHTVOICE_CHECKPOINT_URL", "")
+ENCODER_URL = os.environ.get("SIGHTVOICE_ENCODER_URL", "")
+DECODER_URL = os.environ.get("SIGHTVOICE_DECODER_URL", "")
+VOCAB_URL = os.environ.get("SIGHTVOICE_VOCAB_URL", "")
+
+# Newer Streamlit replaced use_container_width=True with width="stretch"; support both.
+STRETCH = {"width": "stretch"} if "width" in inspect.signature(st.button).parameters else {"use_container_width": True}
+
 
 # ==========================================
 # 1. PAGE SETUP
@@ -300,147 +308,161 @@ ICON_SPARK = '<path d="M12 2l1.9 5.6L19.5 9.5 13.9 11.4 12 17l-1.9-5.6L4.5 9.5l5
 ICON_VOLUME = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>'
 ICON_IMAGE = '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>'
 
+
+st.markdown("""
+<style>
+    .status-pill.pill-warn { background: rgba(255,200,87,0.08); border-color: rgba(255,200,87,0.45); color: #ffc857; }
+    .status-pill.pill-bad  { background: rgba(255,107,107,0.08); border-color: rgba(255,107,107,0.5); color: #ff8a8a; }
+    .fine-print { color: var(--muted); font-size: 0.78rem; line-height: 1.5; margin-top: 28px; }
+</style>
+""", unsafe_allow_html=True)
+
 # ==========================================
-# 4. MODEL & VOCABULARY CLASSES
+# 4. LOAD MODEL (cached)
 # ==========================================
-class Vocabulary:
-    def __init__(self, freq_threshold=2):
-        self.itos = {0: "<PAD>", 1: "<SOS>", 2: "<EOS>", 3: "<UNK>"}
-        self.stoi = {"<PAD>": 0, "<SOS>": 1, "<EOS>": 2, "<UNK>": 3}
-        self.freq_threshold = freq_threshold
-
-    def __len__(self):
-        return len(self.itos)
-
-    def tokenizer(self, text):
-        text = str(text).lower()
-        text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
-        return text.split()
-
-class EncoderCNN(nn.Module):
-    def __init__(self, embed_size):
-        super(EncoderCNN, self).__init__()
-        resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
-        for param in resnet.parameters():
-            param.requires_grad = False
-        modules = list(resnet.children())[:-2]
-        self.resnet = nn.Sequential(*modules)
-        self.embed = nn.Linear(2048, embed_size)
-
-    def forward(self, images):
-        features = self.resnet(images)
-        features = features.permute(0, 2, 3, 1)
-        features = features.view(features.size(0), -1, features.size(3))
-        features = self.embed(features)
-        return features
-
-class BahdanauAttention(nn.Module):
-    def __init__(self, embed_size, hidden_size):
-        super(BahdanauAttention, self).__init__()
-        self.W1 = nn.Linear(embed_size, hidden_size)
-        self.W2 = nn.Linear(hidden_size, hidden_size)
-        self.V = nn.Linear(hidden_size, 1)
-
-    def forward(self, features, hidden):
-        hidden_with_time_axis = hidden.unsqueeze(1)
-        score = torch.tanh(self.W1(features) + self.W2(hidden_with_time_axis))
-        attention_weights = torch.softmax(self.V(score), dim=1)
-        context_vector = attention_weights * features
-        context_vector = torch.sum(context_vector, dim=1)
-        return context_vector, attention_weights
-
-class DecoderRNN(nn.Module):
-    def __init__(self, embed_size, hidden_size, vocab_size, num_layers=1):
-        super(DecoderRNN, self).__init__()
-        self.embed = nn.Embedding(vocab_size, embed_size)
-        self.attention = BahdanauAttention(embed_size, hidden_size)
-        self.gru = nn.GRU(embed_size + embed_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, vocab_size)
-
-    def forward(self, features, hidden, word):
-        word_embed = self.embed(word)
-        context_vector, attention_weights = self.attention(features, hidden)
-        gru_input = torch.cat((word_embed, context_vector), dim=1).unsqueeze(1)
-        output, hidden = self.gru(gru_input, hidden.unsqueeze(0))
-        output = self.fc(output.squeeze(1))
-        return output, hidden.squeeze(0), attention_weights
-
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
 ])
 
-# ==========================================
-# 5. LOAD CACHED MODEL WEIGHTS & VOCAB
-# ==========================================
-@st.cache_resource
+
+def _download(path, url):
+    if path.exists():
+        return True
+    if not url:
+        return False
+    try:
+        urllib.request.urlretrieve(url, path)
+        return path.exists()
+    except Exception:
+        if path.exists():
+            path.unlink()
+        return False
+
+
+@st.cache_resource(show_spinner="Loading SightVoice model...")
 def load_pipeline():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    encoder_path = BASE_DIR / "encoder.pth"
-    decoder_path = BASE_DIR / "decoder.pth"
-    vocab_path = BASE_DIR / "vocab.pkl"
 
-    download_weight_if_missing(encoder_path, ENCODER_URL)
-    download_weight_if_missing(decoder_path, DECODER_URL)
-
-    if not encoder_path.exists() or not decoder_path.exists():
-        st.error("Model weight files could not be found or downloaded.")
-        st.stop()
-
-    if not vocab_path.exists():
-        st.error("Vocabulary file (vocab.pkl) is missing from the directory.")
-        st.stop()
-
-    with open(vocab_path, "rb") as f:
-        vocab = pickle.load(f)
-
-    embed_size = 256
-    hidden_size = 512
-    vocab_size = len(vocab)
-
-    encoder = EncoderCNN(embed_size).to(device)
-    decoder = DecoderRNN(embed_size, hidden_size, vocab_size).to(device)
-
-    encoder.load_state_dict(torch.load(encoder_path, map_location=device, weights_only=True))
-    decoder.load_state_dict(torch.load(decoder_path, map_location=device, weights_only=True))
+    _download(V2_CHECKPOINT, CHECKPOINT_URL)
+    if V2_CHECKPOINT.exists():
+        # New model trained with train.py: one small file, vocab inside.
+        ck = torch.load(V2_CHECKPOINT, map_location=device, weights_only=True)
+        cfg = ck["config"]
+        vocab = Vocabulary.from_list(ck["vocab_itos"])
+        encoder = EncoderCNN(cfg["embed_size"], pretrained=True).to(device)
+        encoder.embed.load_state_dict(ck["embed"])
+        decoder = DecoderRNN(cfg["embed_size"], cfg["hidden_size"], cfg["vocab_size"]).to(device)
+        decoder.load_state_dict(ck["decoder"])
+        static, tag = cfg.get("attention", "dynamic") == "static", "v2"
+    else:
+        # Your original encoder.pth / decoder.pth / vocab.pkl.
+        for path, url in ((LEGACY_ENCODER, ENCODER_URL), (LEGACY_DECODER, DECODER_URL), (LEGACY_VOCAB, VOCAB_URL)):
+            _download(path, url)
+        missing = [p.name for p in (LEGACY_ENCODER, LEGACY_DECODER, LEGACY_VOCAB) if not p.exists()]
+        if missing:
+            return {"error": "Missing model files: " + ", ".join(missing) +
+                             ". Put them next to app.py (or set the SIGHTVOICE_*_URL environment variables)."}
+        vocab = load_vocab_pickle(LEGACY_VOCAB)
+        encoder = EncoderCNN(256, pretrained=False).to(device)
+        encoder.load_state_dict(torch.load(LEGACY_ENCODER, map_location=device, weights_only=True))
+        decoder = DecoderRNN(256, 512, len(vocab)).to(device)
+        decoder.load_state_dict(torch.load(LEGACY_DECODER, map_location=device, weights_only=True))
+        # The original notebook trained with a single, fixed attention context, so it
+        # must be decoded the same way (the old app.py re-attended at every step and
+        # also fed the GRU its inputs in the wrong order).
+        static, tag = True, "v1"
 
     encoder.eval()
     decoder.eval()
+    return dict(encoder=encoder, decoder=decoder, vocab=vocab, device=device, static=static, tag=tag)
 
-    return encoder, decoder, vocab, device
 
-encoder, decoder, vocab, device = load_pipeline()
+pipe = load_pipeline()
+if "error" in pipe:
+    st.error(pipe["error"])
+    st.stop()
+encoder, decoder, vocab = pipe["encoder"], pipe["decoder"], pipe["vocab"]
+device, STATIC_CONTEXT, MODEL_TAG = pipe["device"], pipe["static"], pipe["tag"]
 
-def generate_caption(image, max_len=20):
-    image_tensor = transform(image.convert("RGB")).unsqueeze(0).to(device)
-    caption = []
+# ==========================================
+# 5. HELPERS: IMAGE, CAPTION, SPEECH
+# ==========================================
+def load_image(image_bytes):
+    """Phone cameras store rotation in EXIF metadata - apply it, or the model sees
+    sideways pictures (a common reason for bad results on real photos)."""
+    img = Image.open(io.BytesIO(image_bytes))
+    return ImageOps.exif_transpose(img).convert("RGB")
 
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def run_captioning(image_bytes, beam_size, max_len):
+    image = load_image(image_bytes)
+    x = transform(image).unsqueeze(0).to(device)
     with torch.no_grad():
-        features = encoder(image_tensor)
-        hidden = torch.zeros(1, 512).to(device)
-        word = torch.tensor([vocab.stoi["<SOS>"]]).to(device)
+        feats = encoder(x)
+        return beam_search(decoder, feats, vocab, beam_size=beam_size,
+                           max_len=max_len, static_context=STATIC_CONTEXT)
 
-        for _ in range(max_len):
-            output, hidden, _ = decoder(features, hidden, word)
-            predicted = output.argmax(1)
-            token = vocab.itos[predicted.item()]
 
-            if token == "<EOS>":
-                break
+def pretty(text):
+    text = text.strip()
+    return text[0].upper() + text[1:] + "." if text else ""
 
-            caption.append(token)
-            word = predicted
 
-    return " ".join(caption)
+def confidence_level(c):
+    # Rough, uncalibrated thresholds on the model's own average token probability.
+    # Tune them on a handful of your own test photos.
+    if c >= 0.45:
+        return "high", ""
+    if c >= 0.25:
+        return "medium", "pill-warn"
+    return "low", "pill-bad"
 
-def text_to_speech_bytes(text):
-    tts = gTTS(text=text, lang='en')
+
+def attention_overlay(image, weights, size=224):
+    """Blend a 7x7 attention map over the image (v2 models only)."""
+    side = int(round(len(weights) ** 0.5))
+    w = weights.reshape(side, side)
+    w = (w - w.min()) / (w.max() - w.min() + 1e-8)
+    heat = np.asarray(Image.fromarray((w * 255).astype(np.uint8)).resize((size, size), Image.BICUBIC)) / 255.0
+    base = np.asarray(image.resize((size, size))).astype(float)
+    color = np.zeros_like(base)
+    color[..., 0], color[..., 1] = 255, 190
+    a = (0.65 * heat)[..., None]
+    return Image.fromarray((base * (1 - a) + color * a).astype(np.uint8))
+
+
+LANGS = {"English": "en", "हिन्दी (Hindi)": "hi", "मराठी (Marathi)": "mr"}
+
+
+@st.cache_data(show_spinner=False, max_entries=32)
+def _translate(text, lang_code):          # raises on failure -> failures are not cached
+    from deep_translator import GoogleTranslator
+    return GoogleTranslator(source="en", target=lang_code).translate(text)
+
+
+@st.cache_data(show_spinner=False, max_entries=32)
+def _tts(text, lang_code, slow):          # raises on failure -> failures are not cached
     fp = io.BytesIO()
-    tts.write_to_fp(fp)
-    fp.seek(0)
-    return fp.read()
+    gTTS(text=text, lang=lang_code, slow=slow).write_to_fp(fp)
+    return fp.getvalue()
+
+
+def narrate(text, lang_code, slow):
+    """Returns (mp3 bytes or None, spoken text, optional note for the user)."""
+    note, spoken = None, text
+    if lang_code != "en":
+        try:
+            spoken = _translate(text, lang_code)
+        except Exception:
+            lang_code, note = "en", "Translation is unavailable right now, so the description is spoken in English."
+    try:
+        return _tts(spoken, lang_code, slow), spoken, note
+    except Exception:
+        return None, spoken, "Speech could not be generated (gTTS needs an internet connection)."
+
 
 # ==========================================
 # 6. UI — HERO
@@ -457,10 +479,18 @@ st.markdown(f"""
 
 st.markdown(f"""
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-    <span class="status-pill"><span class="dot"></span> Model online &nbsp;·&nbsp; {str(device).upper()}</span>
+    <span class="status-pill"><span class="dot"></span> Model online &nbsp;·&nbsp; {str(device).upper()} &nbsp;·&nbsp; {MODEL_TAG}</span>
     <span style="color: var(--muted); font-size: 0.78rem; letter-spacing:0.08em;">ATTENTION-BASED CAPTIONING</span>
 </div>
 """, unsafe_allow_html=True)
+
+with st.expander("Settings"):
+    c1, c2 = st.columns(2)
+    beam_size = c1.slider("Beam width (higher = better, slower)", 1, 5, 3)
+    max_len = c2.slider("Maximum caption length", 8, 30, 20)
+    lang_label = c1.selectbox("Narration language", list(LANGS))
+    slow_speech = c2.checkbox("Slower speech", value=False)
+    autoplay = c2.checkbox("Auto-play narration", value=True)
 
 # ==========================================
 # 7. TABS — INPUT
@@ -470,7 +500,7 @@ tab1, tab2 = st.tabs([
     "  Upload Image  "
 ])
 
-image_input = None
+image_bytes = None
 
 with tab1:
     st.markdown(
@@ -479,7 +509,7 @@ with tab1:
     )
     camera_file = st.camera_input("Take a photo", label_visibility="collapsed")
     if camera_file:
-        image_input = Image.open(camera_file)
+        image_bytes = camera_file.getvalue()
 
 with tab2:
     st.markdown(
@@ -492,24 +522,26 @@ with tab2:
         label_visibility="collapsed"
     )
     if uploaded_file:
-        image_input = Image.open(uploaded_file)
+        image_bytes = uploaded_file.getvalue()
 
 # ==========================================
-# 8. OUTPUT — IMAGE, CAPTION, AUDIO
+# 8. OUTPUT — IMAGE, CAPTION, CONFIDENCE, AUDIO
 # ==========================================
-if image_input:
+if image_bytes:
+    image = load_image(image_bytes)
+
     st.markdown(
         f'<div class="section-title">{svg(ICON_IMAGE, size=16, color="#6ea8ff")} Visual Scene</div>',
         unsafe_allow_html=True
     )
-    st.image(image_input, use_container_width=True)
+    st.image(image, **STRETCH)
 
-    with st.spinner("Analyzing scene and synthesizing narration..."):
-        caption_text = generate_caption(image_input)
-        
-        if "audio_bytes" not in st.session_state or st.session_state.get("last_caption") != caption_text:
-            st.session_state.audio_bytes = text_to_speech_bytes(caption_text)
-            st.session_state.last_caption = caption_text
+    with st.spinner("Analyzing scene..."):
+        hyps = run_captioning(image_bytes, beam_size, max_len)
+
+    best = hyps[0]
+    caption = pretty(best["text"]) or "No description could be generated for this image."
+    level, pill_cls = confidence_level(best["confidence"]) if best["words"] else ("low", "pill-bad")
 
     st.markdown(f"""
     <div class="caption-card">
@@ -517,17 +549,54 @@ if image_input:
             {svg(ICON_SPARK, size=14, color="#6ea8ff")}
             <span>Generated Caption</span>
         </div>
-        <p class="caption-text">{caption_text}</p>
+        <p class="caption-text">{html.escape(caption)}</p>
     </div>
+    <span class="status-pill {pill_cls}">Confidence: {level} &nbsp;({best["confidence"] * 100:.0f}%)</span>
     """, unsafe_allow_html=True)
 
+    if level == "low":
+        st.warning("The model is not confident about this scene. Try better lighting, move closer to the "
+                   "main object, or keep the camera steady. Don't rely on this description for anything safety-critical.")
+
+    if len(hyps) > 1:
+        with st.expander("Other possible descriptions"):
+            for h in hyps[1:]:
+                st.write(f"{pretty(h['text'])}  ·  {h['confidence'] * 100:.0f}%")
+
+    if best["attention"] is not None and best["words"]:
+        with st.expander("Where the model looked (per word)"):
+            n = min(len(best["words"]), 12)
+            st.image([attention_overlay(image, best["attention"][i]) for i in range(n)],
+                     caption=best["words"][:n], width=120)
+
+    # ---- narration --------------------------------------------------------
     st.markdown(
         f'<div class="section-title">{svg(ICON_VOLUME, size=16, color="#8affc1")} Voice Narration</div>',
         unsafe_allow_html=True
     )
-    st.audio(st.session_state.audio_bytes, format="audio/mp3", autoplay=True)
+    to_say = caption if level != "low" else "I am not very sure, but it looks like: " + caption
+    audio, spoken, note = narrate(to_say, LANGS[lang_label], slow_speech)
+    if note:
+        st.info(note)
+    if audio:
+        if LANGS[lang_label] != "en" and not note:
+            st.caption(spoken)
+        replay = st.button("Replay Speech Description", **STRETCH)
+        st.audio(audio, format="audio/mp3", autoplay=bool(autoplay or replay))
 
-    st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+    # ---- session history ---------------------------------------------------
+    key = hashlib.md5(image_bytes).hexdigest()
+    hist = st.session_state.setdefault("history", [])
+    if not hist or hist[0]["key"] != key:
+        hist.insert(0, dict(key=key, text=caption, conf=best["confidence"]))
+        del hist[8:]
+    if len(hist) > 1:
+        with st.expander("Recent descriptions"):
+            for h in hist:
+                st.write(f"{h['text']}  ·  {h['conf'] * 100:.0f}%")
 
-    if st.button("Replay Speech Description", use_container_width=True):
-        st.audio(st.session_state.audio_bytes, format="audio/mp3", autoplay=True)
+st.markdown(
+    '<div class="fine-print">Descriptions are generated by a small AI model and can be wrong. '
+    'Confidence is the model\'s own estimate, not a guarantee.</div>',
+    unsafe_allow_html=True
+)
